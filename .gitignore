@@ -1,0 +1,19 @@
+# Build output
+/build/
+/out/
+*.exe
+*.o
+*.obj
+*.pdb
+
+# IDE and editor files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
