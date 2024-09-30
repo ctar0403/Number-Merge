@@ -102,7 +102,7 @@ void drawShadowText(HDC dc, const std::wstring& text, RECT rect, int size,
     drawText(dc, text, rect, size, FW_HEAVY, color, flags, L"Arial");
 }
 
-COLORREF tileColor(int value) {
+COLORREF tileColor(int value, bool gray_theme = false) {
     static constexpr std::array<COLORREF, 12> colors{
         RGB(68, 182, 239),  RGB(238, 36, 49),   RGB(132, 40, 224),
         RGB(53, 201, 47),   RGB(255, 111, 22),  RGB(239, 62, 148),
@@ -112,10 +112,15 @@ COLORREF tileColor(int value) {
     for (int number = std::max(value, 2); number > 2; number /= 2) {
         ++tier;
     }
+    if (gray_theme) {
+        const int shade = 78 + (tier * 31) % 108;
+        return RGB(shade, shade, std::min(205, shade + 7));
+    }
     return colors[static_cast<std::size_t>(tier) % colors.size()];
 }
 
-void drawTile(HDC dc, int x, int y, int width, int height, int value, double scale = 1.0) {
+void drawTile(HDC dc, int x, int y, int width, int height, int value,
+              bool gray_theme, double scale = 1.0) {
     const int scaled_width = static_cast<int>(width * scale);
     const int scaled_height = static_cast<int>(height * scale);
     x -= (scaled_width - width) / 2;
@@ -123,11 +128,12 @@ void drawTile(HDC dc, int x, int y, int width, int height, int value, double sca
     width = scaled_width;
     height = scaled_height;
 
-    const COLORREF color = tileColor(value);
+    const COLORREF color = tileColor(value, gray_theme);
     fillRoundedRect(dc, x + 3, y + 5, x + width + 3, y + height + 5, 14,
-                    RGB(55, 24, 11));
+                    gray_theme ? RGB(35, 37, 41) : RGB(55, 24, 11));
     fillRoundedRect(dc, x, y, x + width, y + height, 14,
-                    blend(color, RGB(0, 0, 0), 0.28), RGB(63, 28, 16), 2);
+                    blend(color, RGB(0, 0, 0), 0.28),
+                    gray_theme ? RGB(32, 34, 38) : RGB(63, 28, 16), 2);
     fillRoundedRect(dc, x + 2, y + 2, x + width - 2, y + height - 6, 12, color);
     fillRoundedRect(dc, x + 5, y + 4, x + width - 5, y + 11, 7,
                     blend(color, RGB(255, 255, 255), 0.42));
@@ -144,7 +150,14 @@ void drawTile(HDC dc, int x, int y, int width, int height, int value, double sca
     drawShadowText(dc, label, text_rect, font_size, RGB(255, 255, 255));
 }
 
-void drawWood(HDC dc) {
+void drawBackground(HDC dc, bool gray_theme) {
+    if (gray_theme) {
+        fillRect(dc, 0, 0, kDesignWidth, kDesignHeight, RGB(72, 75, 81));
+        for (int y = 0; y < kDesignHeight; y += 72) {
+            fillRect(dc, 0, y, kDesignWidth, y + 1, RGB(84, 87, 93));
+        }
+        return;
+    }
     fillRect(dc, 0, 0, kDesignWidth, kDesignHeight, RGB(130, 67, 31));
     constexpr int plank_width = 74;
     for (int plank = -1; plank * plank_width < kDesignWidth; ++plank) {
@@ -229,6 +242,12 @@ public:
         InvalidateRect(window, nullptr, FALSE);
     }
 
+    void toggleTheme(HWND window) {
+        gray_theme_ = !gray_theme_;
+        message_.clear();
+        InvalidateRect(window, nullptr, FALSE);
+    }
+
     void launch(HWND window, int column) {
         if (phase_ != Phase::Idle || game_.isGameOver() || column < 0 || column >= 5) {
             return;
@@ -292,14 +311,21 @@ public:
             new_hover = (point.x - kGridLeft) / kCellWidth;
         }
         const bool new_button_hover = contains(new_button_rect_, point);
-        if (new_hover != hover_column_ || new_button_hover != new_button_hover_) {
+        const bool theme_button_hover = contains(theme_button_rect_, point);
+        if (new_hover != hover_column_ || new_button_hover != new_button_hover_ ||
+            theme_button_hover != theme_button_hover_) {
             hover_column_ = new_hover;
             new_button_hover_ = new_button_hover;
+            theme_button_hover_ = theme_button_hover;
             InvalidateRect(window, nullptr, FALSE);
         }
     }
 
     void click(HWND window, POINT point) {
+        if (contains(theme_button_rect_, point)) {
+            toggleTheme(window);
+            return;
+        }
         if (contains(new_button_rect_, point)) {
             newGame(window);
             return;
@@ -311,7 +337,7 @@ public:
     }
 
     bool isInteractive(POINT point) const {
-        return contains(new_button_rect_, point) ||
+        return contains(new_button_rect_, point) || contains(theme_button_rect_, point) ||
                (point.x >= kGridLeft && point.x < kGridLeft + 5 * kCellWidth &&
                 point.y >= kBoardTop && point.y < kBoardBottom);
     }
@@ -333,7 +359,7 @@ public:
                          static_cast<int>(kDesignHeight * layout.scale), nullptr);
         SetViewportOrgEx(dc, layout.offset_x, layout.offset_y, nullptr);
 
-        drawWood(dc);
+        drawBackground(dc, gray_theme_);
         drawHeader(dc);
         drawBoard(dc);
         drawControls(dc);
@@ -347,6 +373,10 @@ public:
     }
 
 private:
+    COLORREF themed(COLORREF wood, COLORREF gray) const {
+        return gray_theme_ ? gray : wood;
+    }
+
     void seedBoard() {
         game_.reset();
         static constexpr std::array<int, 5> first_row{2, 4, 8, 16, 2};
@@ -359,49 +389,64 @@ private:
 
     void drawHeader(HDC dc) const {
         RECT title{10, 18, 510, 57};
-        drawShadowText(dc, L"WOOD NUMBER MERGE", title, 31, RGB(255, 239, 190));
+        drawShadowText(dc, L"WOOD NUMBER MERGE", title, 31,
+                       themed(RGB(255, 239, 190), RGB(244, 245, 247)));
         RECT subtitle{20, 57, 500, 78};
         drawText(dc, L"MATCH 2  -  LEVEL UP  -  MAKE COMBOS", subtitle, 13, FW_BOLD,
-                 RGB(255, 213, 130));
+                 themed(RGB(255, 213, 130), RGB(207, 210, 216)));
 
-        fillRoundedRect(dc, 43, 91, 247, 166, 18, RGB(76, 32, 13), RGB(54, 22, 9), 2);
-        fillRoundedRect(dc, 273, 91, 477, 166, 18, RGB(76, 32, 13), RGB(54, 22, 9), 2);
+        fillRoundedRect(dc, 43, 91, 247, 166, 18,
+                        themed(RGB(76, 32, 13), RGB(43, 46, 51)),
+                        themed(RGB(54, 22, 9), RGB(27, 29, 33)), 2);
+        fillRoundedRect(dc, 273, 91, 477, 166, 18,
+                        themed(RGB(76, 32, 13), RGB(43, 46, 51)),
+                        themed(RGB(54, 22, 9), RGB(27, 29, 33)), 2);
         RECT score_label{55, 96, 235, 119};
         RECT score_value{55, 115, 235, 158};
         RECT best_label{285, 96, 465, 119};
         RECT best_value{285, 115, 465, 158};
-        drawText(dc, L"SCORE", score_label, 14, FW_BOLD, RGB(255, 190, 64));
-        drawShadowText(dc, std::to_wstring(game_.score()), score_value, 28, RGB(255, 241, 77));
-        drawText(dc, L"BEST", best_label, 14, FW_BOLD, RGB(255, 190, 64));
+        drawText(dc, L"SCORE", score_label, 14, FW_BOLD,
+                 themed(RGB(255, 190, 64), RGB(205, 208, 214)));
+        drawShadowText(dc, std::to_wstring(game_.score()), score_value, 28,
+                       themed(RGB(255, 241, 77), RGB(255, 255, 255)));
+        drawText(dc, L"BEST", best_label, 14, FW_BOLD,
+                 themed(RGB(255, 190, 64), RGB(205, 208, 214)));
         drawShadowText(dc, std::to_wstring(best_), best_value, 28, RGB(255, 255, 255));
     }
 
     void drawBoard(HDC dc) const {
         fillRoundedRect(dc, kBoardLeft + 5, kBoardTop + 7, kBoardRight + 5, kBoardBottom + 7,
-                        18, RGB(62, 26, 12));
+                        18, themed(RGB(62, 26, 12), RGB(31, 33, 37)));
         fillRoundedRect(dc, kBoardLeft, kBoardTop, kBoardRight, kBoardBottom, 18,
-                        RGB(72, 34, 17), RGB(44, 19, 9), 3);
+                        themed(RGB(72, 34, 17), RGB(48, 51, 56)),
+                        themed(RGB(44, 19, 9), RGB(25, 27, 30)), 3);
         fillRoundedRect(dc, kGridLeft, kGridTop, kGridLeft + 5 * kCellWidth, kBoardBottom - 8,
-                        11, RGB(82, 40, 20));
+                        11, themed(RGB(82, 40, 20), RGB(56, 59, 65)));
 
         for (int column = 0; column < 5; ++column) {
             const int left = kGridLeft + column * kCellWidth;
-            const COLORREF lane = column % 2 == 0 ? RGB(87, 43, 21) : RGB(76, 36, 18);
+            const COLORREF lane = gray_theme_
+                                      ? (column % 2 == 0 ? RGB(60, 63, 69) : RGB(54, 57, 63))
+                                      : (column % 2 == 0 ? RGB(87, 43, 21) : RGB(76, 36, 18));
             fillRect(dc, left + 2, kGridTop + 2, left + kCellWidth - 2, kBoardBottom - 10, lane);
             if (column == hover_column_ && phase_ == Phase::Idle && !game_.isGameOver()) {
                 fillRoundedRect(dc, left + 3, kGridTop + 3, left + kCellWidth - 3,
-                                kBoardBottom - 11, 8, RGB(111, 61, 27));
+                                kBoardBottom - 11, 8,
+                                themed(RGB(111, 61, 27), RGB(82, 86, 94)));
             }
             if (column > 0) {
-                fillRect(dc, left - 1, kGridTop, left + 1, kBoardBottom - 8, RGB(42, 18, 8));
+                fillRect(dc, left - 1, kGridTop, left + 1, kBoardBottom - 8,
+                         themed(RGB(42, 18, 8), RGB(34, 36, 40)));
             }
 
             const int center = left + kCellWidth / 2;
             POINT arrow[3]{{center, kGridBottom + 14},
                            {center - 12, kGridBottom + 32},
                            {center + 12, kGridBottom + 32}};
-            HBRUSH arrow_brush = CreateSolidBrush(column == hover_column_ ? RGB(255, 196, 44)
-                                                                          : RGB(126, 71, 35));
+            HBRUSH arrow_brush = CreateSolidBrush(
+                column == hover_column_
+                    ? themed(RGB(255, 196, 44), RGB(235, 237, 241))
+                    : themed(RGB(126, 71, 35), RGB(108, 112, 120)));
             const HGDIOBJ old_brush = SelectObject(dc, arrow_brush);
             const HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
             Polygon(dc, arrow, 3);
@@ -427,7 +472,7 @@ private:
                 }
                 drawTile(dc, kGridLeft + static_cast<int>(column) * kCellWidth + 5,
                          kGridTop + static_cast<int>(row) * kCellHeight + 4,
-                         kCellWidth - 10, kCellHeight - 9, value);
+                         kCellWidth - 10, kCellHeight - 9, value, gray_theme_);
             }
         }
 
@@ -441,7 +486,7 @@ private:
             const int y = static_cast<int>(start_y + (target_y - start_y) * eased);
             drawLaunchTrail(dc, y, progress);
             drawTile(dc, kGridLeft + static_cast<int>(last_move_.column) * kCellWidth + 5, y,
-                     kCellWidth - 10, kCellHeight - 9, launched_value_);
+                     kCellWidth - 10, kCellHeight - 9, launched_value_, gray_theme_);
         } else if (phase_ == Phase::Impact) {
             drawImpact(dc);
         } else if (phase_ == Phase::Burst) {
@@ -449,27 +494,33 @@ private:
         }
 
         if (game_.isGameOver() && phase_ == Phase::Idle) {
-            fillRoundedRect(dc, 89, 362, 431, 558, 24, RGB(54, 22, 12), RGB(255, 181, 40), 4);
+            fillRoundedRect(dc, 89, 362, 431, 558, 24,
+                            themed(RGB(54, 22, 12), RGB(38, 40, 45)),
+                            themed(RGB(255, 181, 40), RGB(213, 216, 222)), 4);
             RECT over{100, 382, 420, 426};
             RECT final_label{100, 431, 420, 461};
             RECT final_score{100, 460, 420, 508};
             RECT hint{100, 515, 420, 543};
-            drawShadowText(dc, L"BOARD FULL!", over, 31, RGB(255, 91, 54));
-            drawText(dc, L"FINAL SCORE", final_label, 15, FW_BOLD, RGB(255, 203, 119));
-            drawShadowText(dc, std::to_wstring(game_.score()), final_score, 34, RGB(255, 244, 74));
+            drawShadowText(dc, L"BOARD FULL!", over, 31,
+                           themed(RGB(255, 91, 54), RGB(238, 239, 242)));
+            drawText(dc, L"FINAL SCORE", final_label, 15, FW_BOLD,
+                     themed(RGB(255, 203, 119), RGB(197, 200, 206)));
+            drawShadowText(dc, std::to_wstring(game_.score()), final_score, 34,
+                           themed(RGB(255, 244, 74), RGB(255, 255, 255)));
             drawText(dc, L"PRESS NEW GAME TO PLAY AGAIN", hint, 13, FW_BOLD, RGB(255, 255, 255));
         }
 
         if (!message_.empty()) {
             RECT message_rect{100, 721, 420, 758};
-            drawShadowText(dc, message_, message_rect, 18, RGB(255, 105, 69));
+            drawShadowText(dc, message_, message_rect, 18,
+                           themed(RGB(255, 105, 69), RGB(240, 241, 244)));
         }
     }
 
     void drawLaunchTrail(HDC dc, int tile_y, double progress) const {
         const int center_x = kGridLeft + static_cast<int>(last_move_.column) * kCellWidth +
                              kCellWidth / 2;
-        const COLORREF tile_color = tileColor(launched_value_);
+        const COLORREF tile_color = tileColor(launched_value_, gray_theme_);
         for (int spark = 0; spark < 9; ++spark) {
             const double life = 1.0 - spark / 10.0;
             const int wobble = static_cast<int>(std::sin(progress * 18.0 + spark * 1.7) * 11.0);
@@ -478,10 +529,12 @@ private:
                 continue;
             }
             const int radius = std::max(2, 7 - spark / 2);
-            const COLORREF color = spark % 2 == 0
-                                       ? blend(tile_color, RGB(255, 245, 120), 0.65)
-                                       : blend(RGB(255, 151, 22), RGB(92, 43, 20),
-                                               (1.0 - life) * 0.45);
+            const COLORREF color = gray_theme_
+                                       ? blend(tile_color, RGB(250, 250, 252), life * 0.62)
+                                       : (spark % 2 == 0
+                                              ? blend(tile_color, RGB(255, 245, 120), 0.65)
+                                              : blend(RGB(255, 151, 22), RGB(92, 43, 20),
+                                                      (1.0 - life) * 0.45));
             fillEllipse(dc, center_x + wobble, y, radius, color);
         }
     }
@@ -499,7 +552,9 @@ private:
 
         const int ring_radius = 34 + static_cast<int>(progress * 35.0);
         HPEN ring_pen = CreatePen(PS_SOLID, std::max(1, 4 - static_cast<int>(progress * 3.0)),
-                                  blend(tileColor(launched_value_), RGB(255, 235, 104), 0.6));
+                                  blend(tileColor(launched_value_, gray_theme_),
+                                        gray_theme_ ? RGB(245, 246, 249) : RGB(255, 235, 104),
+                                        0.6));
         const HGDIOBJ old_pen = SelectObject(dc, ring_pen);
         const HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
         Ellipse(dc, center_x - ring_radius, center_y - ring_radius,
@@ -510,7 +565,8 @@ private:
 
         const double bounce = 1.0 + 0.12 * std::sin(progress * kPi);
         const int value = last_move_.combo > 0 ? launched_value_ : last_move_.resulting_value;
-        drawTile(dc, x, y, kCellWidth - 10, kCellHeight - 9, value, bounce);
+        drawTile(dc, x, y, kCellWidth - 10, kCellHeight - 9,
+                 value, gray_theme_, bounce);
     }
 
     void drawBurst(HDC dc) const {
@@ -529,7 +585,8 @@ private:
 
         const double ray_life = std::max(0.0, 1.0 - progress / 0.48);
         if (ray_life > 0.0) {
-            const COLORREF ray_color = blend(RGB(255, 242, 89), RGB(99, 49, 23),
+            const COLORREF ray_color = blend(themed(RGB(255, 242, 89), RGB(250, 251, 252)),
+                                             themed(RGB(99, 49, 23), RGB(62, 65, 71)),
                                              1.0 - ray_life);
             HPEN ray_pen = CreatePen(PS_SOLID, std::max(1, static_cast<int>(5 * ray_life)),
                                      ray_color);
@@ -549,7 +606,7 @@ private:
 
         // Deterministic particles keep the effect stable between repaint calls while
         // still providing varied spark directions, speeds, sizes, and colors.
-        const COLORREF result_color = tileColor(last_move_.resulting_value);
+        const COLORREF result_color = tileColor(last_move_.resulting_value, gray_theme_);
         for (int particle = 0; particle < 34; ++particle) {
             const double angle = particle * 2.399963229728653 +
                                  (last_move_.resulting_value % 11) * 0.09;
@@ -561,10 +618,13 @@ private:
             const int tail_x = center_x + static_cast<int>(std::cos(angle) * distance * 0.72);
             const int tail_y = center_y + static_cast<int>(std::sin(angle) * distance * 0.72 +
                                                            50.0 * progress * progress);
-            COLORREF color = particle % 4 == 0
-                                 ? RGB(255, 255, 220)
-                                 : (particle % 3 == 0 ? RGB(255, 178, 26) : result_color);
-            color = blend(color, RGB(86, 41, 20), progress * 0.72);
+            COLORREF color = gray_theme_
+                                 ? (particle % 4 == 0 ? RGB(255, 255, 255) : result_color)
+                                 : (particle % 4 == 0
+                                        ? RGB(255, 255, 220)
+                                        : (particle % 3 == 0 ? RGB(255, 178, 26) : result_color));
+            color = blend(color, gray_theme_ ? RGB(57, 60, 66) : RGB(86, 41, 20),
+                          progress * 0.72);
 
             HPEN trail_pen = CreatePen(PS_SOLID, particle % 3 == 0 ? 3 : 2, color);
             const HGDIOBJ old_trail = SelectObject(dc, trail_pen);
@@ -597,7 +657,9 @@ private:
             }
             const int radius = 32 + static_cast<int>(ring_progress * 105.0);
             HPEN ring_pen = CreatePen(PS_SOLID, std::max(1, 4 - ring),
-                                      blend(result_color, RGB(91, 44, 21), ring_progress));
+                                      blend(result_color,
+                                            themed(RGB(91, 44, 21), RGB(61, 64, 70)),
+                                            ring_progress));
             const HGDIOBJ old_ring_pen = SelectObject(dc, ring_pen);
             const HGDIOBJ old_ring_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
             Ellipse(dc, center_x - radius, center_y - radius,
@@ -610,12 +672,13 @@ private:
         const double pulse = 1.0 + 0.24 * std::sin(std::min(1.0, progress / 0.68) * kPi) *
                                          (1.0 - progress * 0.35);
         drawTile(dc, x, y, kCellWidth - 10, kCellHeight - 9,
-                 last_move_.resulting_value, pulse);
+                 last_move_.resulting_value, gray_theme_, pulse);
 
         if (progress < 0.9) {
             const int badge_y = std::min(kBoardBottom - 70, final_y + 62) -
                                 static_cast<int>(progress * 42.0);
-            const COLORREF badge_color = blend(RGB(20, 91, 230), RGB(75, 37, 19),
+            const COLORREF badge_color = blend(themed(RGB(20, 91, 230), RGB(90, 94, 103)),
+                                               themed(RGB(75, 37, 19), RGB(55, 58, 64)),
                                                std::max(0.0, progress - 0.65) * 2.0);
             fillRoundedRect(dc, center_x - 86, badge_y, center_x + 86, badge_y + 40, 18,
                             badge_color, RGB(255, 255, 255), 2);
@@ -630,26 +693,42 @@ private:
     }
 
     void drawControls(HDC dc) const {
-        RECT prompt{25, 775, 495, 802};
-        drawText(dc, L"CLICK A COLUMN TO LAUNCH", prompt, 15, FW_HEAVY,
-                 RGB(255, 229, 164));
+        RECT prompt{25, 775, 350, 806};
+        drawText(dc, L"CLICK A COLUMN TO LAUNCH", prompt, 14, FW_HEAVY,
+                 themed(RGB(255, 229, 164), RGB(230, 232, 236)));
 
-        fillRoundedRect(dc, 34, 811, 151, 881, 16, RGB(79, 34, 15), RGB(49, 20, 8), 2);
+        const COLORREF theme_button = theme_button_hover_
+                                          ? themed(RGB(183, 112, 48), RGB(138, 142, 151))
+                                          : themed(RGB(116, 67, 34), RGB(91, 95, 104));
+        fillRoundedRect(dc, theme_button_rect_.left, theme_button_rect_.top,
+                        theme_button_rect_.right, theme_button_rect_.bottom,
+                        12, theme_button, themed(RGB(66, 28, 12), RGB(43, 45, 50)), 2);
+        RECT theme_text = theme_button_rect_;
+        drawText(dc, gray_theme_ ? L"WOOD THEME" : L"GRAY THEME", theme_text,
+                 11, FW_HEAVY, RGB(255, 255, 255));
+
+        fillRoundedRect(dc, 34, 811, 151, 881, 16,
+                        themed(RGB(79, 34, 15), RGB(43, 46, 51)),
+                        themed(RGB(49, 20, 8), RGB(27, 29, 33)), 2);
         RECT next_label{39, 815, 91, 840};
-        drawText(dc, L"NEXT", next_label, 12, FW_BOLD, RGB(255, 184, 68));
-        drawTile(dc, 96, 819, 47, 49, next_);
+        drawText(dc, L"NEXT", next_label, 12, FW_BOLD,
+                 themed(RGB(255, 184, 68), RGB(207, 210, 216)));
+        drawTile(dc, 96, 819, 47, 49, next_, gray_theme_);
 
         RECT current_label{164, 807, 330, 828};
-        drawText(dc, L"CURRENT", current_label, 12, FW_BOLD, RGB(255, 184, 68));
-        drawTile(dc, 208, 824, 78, 58, current_);
+        drawText(dc, L"CURRENT", current_label, 12, FW_BOLD,
+                 themed(RGB(255, 184, 68), RGB(207, 210, 216)));
+        drawTile(dc, 208, 824, 78, 58, current_, gray_theme_);
 
-        const COLORREF button = new_button_hover_ ? RGB(255, 154, 24) : RGB(234, 104, 20);
+        const COLORREF button = new_button_hover_
+                                    ? themed(RGB(255, 154, 24), RGB(133, 137, 146))
+                                    : themed(RGB(234, 104, 20), RGB(92, 96, 105));
         fillRoundedRect(dc, new_button_rect_.left + 3, new_button_rect_.top + 5,
                         new_button_rect_.right + 3, new_button_rect_.bottom + 5,
-                        16, RGB(69, 27, 10));
+                        16, themed(RGB(69, 27, 10), RGB(31, 33, 37)));
         fillRoundedRect(dc, new_button_rect_.left, new_button_rect_.top,
                         new_button_rect_.right, new_button_rect_.bottom,
-                        16, button, RGB(95, 35, 8), 2);
+                        16, button, themed(RGB(95, 35, 8), RGB(45, 47, 52)), 2);
         RECT button_text = new_button_rect_;
         drawShadowText(dc, L"NEW GAME", button_text, 15, RGB(255, 255, 255));
     }
@@ -667,7 +746,10 @@ private:
     ULONGLONG phase_started_ = 0;
     int hover_column_ = -1;
     bool new_button_hover_ = false;
+    bool theme_button_hover_ = false;
+    bool gray_theme_ = false;
     std::wstring message_;
+    const RECT theme_button_rect_{359, 776, 486, 806};
     const RECT new_button_rect_{352, 819, 486, 875};
 };
 
@@ -715,6 +797,8 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM w_param, LPAR
                 app->launch(window, static_cast<int>(w_param - '1'));
             } else if (w_param == 'R' || w_param == 'N') {
                 app->newGame(window);
+            } else if (w_param == 'T') {
+                app->toggleTheme(window);
             } else if (w_param == VK_ESCAPE) {
                 DestroyWindow(window);
             }

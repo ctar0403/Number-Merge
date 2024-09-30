@@ -17,6 +17,7 @@ assets from the commercial mobile game.
 - Current and next tile previews
 - Persistent local best score
 - Responsive window scaling and keyboard shortcuts
+- Wood and simple grayscale themes with an in-game toggle
 - Dependency-free C++17 game logic with automated tests
 
 ## Build and play
@@ -47,6 +48,7 @@ The executable location can vary with the selected CMake generator.
 - Click one of the five board columns to launch the current tile.
 - Press `1` through `5` as keyboard shortcuts for the columns.
 - Click **New Game**, or press `R`/`N`, to restart.
+- Click **Gray Theme**/**Wood Theme**, or press `T`, to switch themes.
 - Press `Esc` to quit.
 
 Two or more equal tiles connected horizontally or vertically merge into a
