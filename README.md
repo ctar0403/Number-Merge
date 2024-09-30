@@ -2,7 +2,7 @@
 
 A native Windows puzzle game inspired by the core gameplay and warm wooden
 presentation of Wood Number Merge. Number tiles launch upward into five lanes;
-groups of at least three matching tiles combine into a larger number.
+groups of at least two matching tiles combine into a larger number.
 
 This is an original implementation. It does not include code, branding, or
 assets from the commercial mobile game.
@@ -11,9 +11,9 @@ assets from the commercial mobile game.
 
 - Native mouse-driven graphical interface (no console window)
 - Procedurally drawn wooden board and colorful number tiles
-- Smooth tile-launch, merge-pulse, and combo effects
+- Smooth launch, impact, merge-pulse, spark, particle, and combo effects
 - Five lanes with eight tile positions each
-- Orthogonal match-three detection, upward compaction, and cascade combos
+- Orthogonal pair matching, upward compaction, and cascade combos
 - Current and next tile previews
 - Persistent local best score
 - Responsive window scaling and keyboard shortcuts
@@ -49,7 +49,7 @@ The executable location can vary with the selected CMake generator.
 - Click **New Game**, or press `R`/`N`, to restart.
 - Press `Esc` to quit.
 
-Three or more equal tiles connected horizontally or vertically merge into a
+Two or more equal tiles connected horizontally or vertically merge into a
 tile worth twice as much. A merged tile can immediately trigger another merge,
 creating a higher-scoring combo. The game ends when all lanes are full.
 

@@ -31,6 +31,10 @@ constexpr int kCellWidth = 86;
 constexpr int kCellHeight = 64;
 constexpr int kGridBottom = kGridTop + static_cast<int>(number_merge::Game::kRows) * kCellHeight;
 constexpr UINT_PTR kAnimationTimer = 1;
+constexpr double kPi = 3.14159265358979323846;
+constexpr ULONGLONG kLaunchDuration = 300;
+constexpr ULONGLONG kImpactDuration = 140;
+constexpr ULONGLONG kBurstDuration = 720;
 
 COLORREF blend(COLORREF color, COLORREF toward, double amount) {
     const auto mix = [amount](int from, int to) {
@@ -62,6 +66,17 @@ void fillRect(HDC dc, int left, int top, int right, int bottom, COLORREF color) 
     RECT rect{left, top, right, bottom};
     HBRUSH brush = CreateSolidBrush(color);
     FillRect(dc, &rect, brush);
+    DeleteObject(brush);
+}
+
+void fillEllipse(HDC dc, int center_x, int center_y, int radius, COLORREF color) {
+    HBRUSH brush = CreateSolidBrush(color);
+    const HGDIOBJ old_brush = SelectObject(dc, brush);
+    const HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+    Ellipse(dc, center_x - radius, center_y - radius,
+            center_x + radius + 1, center_y + radius + 1);
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
     DeleteObject(brush);
 }
 
@@ -193,7 +208,7 @@ bool contains(const RECT& rect, POINT point) {
 
 class AppState {
 public:
-    enum class Phase { Idle, Launch, Burst };
+    enum class Phase { Idle, Launch, Impact, Burst };
 
     AppState()
         : generator_(std::random_device{}()), current_(randomTile(generator_)),
@@ -251,7 +266,10 @@ public:
 
     void tick(HWND window) {
         const ULONGLONG elapsed = GetTickCount64() - phase_started_;
-        if (phase_ == Phase::Launch && elapsed >= 230) {
+        if (phase_ == Phase::Launch && elapsed >= kLaunchDuration) {
+            phase_ = Phase::Impact;
+            phase_started_ = GetTickCount64();
+        } else if (phase_ == Phase::Impact && elapsed >= kImpactDuration) {
             if (last_move_.combo > 0) {
                 phase_ = Phase::Burst;
                 phase_started_ = GetTickCount64();
@@ -260,7 +278,7 @@ public:
                 phase_ = Phase::Idle;
                 KillTimer(window, kAnimationTimer);
             }
-        } else if (phase_ == Phase::Burst && elapsed >= 520) {
+        } else if (phase_ == Phase::Burst && elapsed >= kBurstDuration) {
             phase_ = Phase::Idle;
             KillTimer(window, kAnimationTimer);
         }
@@ -343,7 +361,7 @@ private:
         RECT title{10, 18, 510, 57};
         drawShadowText(dc, L"WOOD NUMBER MERGE", title, 31, RGB(255, 239, 190));
         RECT subtitle{20, 57, 500, 78};
-        drawText(dc, L"MATCH 3  -  LEVEL UP  -  MAKE COMBOS", subtitle, 13, FW_BOLD,
+        drawText(dc, L"MATCH 2  -  LEVEL UP  -  MAKE COMBOS", subtitle, 13, FW_BOLD,
                  RGB(255, 213, 130));
 
         fillRoundedRect(dc, 43, 91, 247, 166, 18, RGB(76, 32, 13), RGB(54, 22, 9), 2);
@@ -392,14 +410,19 @@ private:
             DeleteObject(arrow_brush);
         }
 
-        const auto& visible_board = phase_ == Phase::Launch ? before_ : game_.board();
+        const bool show_before = phase_ == Phase::Launch ||
+                                 (phase_ == Phase::Impact && last_move_.combo > 0);
+        const auto& visible_board = show_before ? before_ : game_.board();
         for (std::size_t row = 0; row < number_merge::Game::kRows; ++row) {
             for (std::size_t column = 0; column < number_merge::Game::kColumns; ++column) {
                 const int value = visible_board[row][column];
                 if (value == 0) {
                     continue;
                 }
-                if (phase_ == Phase::Burst && row == last_move_.row && column == last_move_.column) {
+                const bool animated_result =
+                    phase_ == Phase::Burst ||
+                    (phase_ == Phase::Impact && last_move_.combo == 0);
+                if (animated_result && row == last_move_.row && column == last_move_.column) {
                     continue;
                 }
                 drawTile(dc, kGridLeft + static_cast<int>(column) * kCellWidth + 5,
@@ -410,13 +433,17 @@ private:
 
         if (phase_ == Phase::Launch) {
             const double elapsed = static_cast<double>(GetTickCount64() - phase_started_);
-            const double progress = std::clamp(elapsed / 230.0, 0.0, 1.0);
-            const double eased = 1.0 - std::pow(1.0 - progress, 3.0);
+            const double progress = std::clamp(elapsed / static_cast<double>(kLaunchDuration),
+                                               0.0, 1.0);
+            const double eased = 1.0 - std::pow(1.0 - progress, 4.0);
             const int target_y = kGridTop + static_cast<int>(launch_row_) * kCellHeight + 4;
             const int start_y = kGridBottom + 28;
             const int y = static_cast<int>(start_y + (target_y - start_y) * eased);
+            drawLaunchTrail(dc, y, progress);
             drawTile(dc, kGridLeft + static_cast<int>(last_move_.column) * kCellWidth + 5, y,
                      kCellWidth - 10, kCellHeight - 9, launched_value_);
+        } else if (phase_ == Phase::Impact) {
+            drawImpact(dc);
         } else if (phase_ == Phase::Burst) {
             drawBurst(dc);
         }
@@ -439,42 +466,167 @@ private:
         }
     }
 
-    void drawBurst(HDC dc) const {
+    void drawLaunchTrail(HDC dc, int tile_y, double progress) const {
+        const int center_x = kGridLeft + static_cast<int>(last_move_.column) * kCellWidth +
+                             kCellWidth / 2;
+        const COLORREF tile_color = tileColor(launched_value_);
+        for (int spark = 0; spark < 9; ++spark) {
+            const double life = 1.0 - spark / 10.0;
+            const int wobble = static_cast<int>(std::sin(progress * 18.0 + spark * 1.7) * 11.0);
+            const int y = tile_y + 45 + spark * 15;
+            if (y >= kBoardBottom - 9) {
+                continue;
+            }
+            const int radius = std::max(2, 7 - spark / 2);
+            const COLORREF color = spark % 2 == 0
+                                       ? blend(tile_color, RGB(255, 245, 120), 0.65)
+                                       : blend(RGB(255, 151, 22), RGB(92, 43, 20),
+                                               (1.0 - life) * 0.45);
+            fillEllipse(dc, center_x + wobble, y, radius, color);
+        }
+    }
+
+    void drawImpact(HDC dc) const {
         const double progress = std::clamp(
-            static_cast<double>(GetTickCount64() - phase_started_) / 520.0, 0.0, 1.0);
+            static_cast<double>(GetTickCount64() - phase_started_) /
+                static_cast<double>(kImpactDuration),
+            0.0, 1.0);
         const int x = kGridLeft + static_cast<int>(last_move_.column) * kCellWidth + 5;
-        const int y = kGridTop + static_cast<int>(last_move_.row) * kCellHeight + 4;
+        const std::size_t row = last_move_.combo > 0 ? launch_row_ : last_move_.row;
+        const int y = kGridTop + static_cast<int>(row) * kCellHeight + 4;
         const int center_x = x + (kCellWidth - 10) / 2;
         const int center_y = y + (kCellHeight - 9) / 2;
 
-        HPEN ray_pen = CreatePen(PS_SOLID, 5, RGB(255, 224, 57));
-        const HGDIOBJ old_pen = SelectObject(dc, ray_pen);
-        for (int ray = 0; ray < 12; ++ray) {
-            const double angle = ray * 3.141592653589793 / 6.0;
-            const double inner = 47.0 + progress * 12.0;
-            const double outer = 77.0 + progress * 28.0;
-            MoveToEx(dc, center_x + static_cast<int>(std::cos(angle) * inner),
-                     center_y + static_cast<int>(std::sin(angle) * inner), nullptr);
-            LineTo(dc, center_x + static_cast<int>(std::cos(angle) * outer),
-                   center_y + static_cast<int>(std::sin(angle) * outer));
-        }
+        const int ring_radius = 34 + static_cast<int>(progress * 35.0);
+        HPEN ring_pen = CreatePen(PS_SOLID, std::max(1, 4 - static_cast<int>(progress * 3.0)),
+                                  blend(tileColor(launched_value_), RGB(255, 235, 104), 0.6));
+        const HGDIOBJ old_pen = SelectObject(dc, ring_pen);
+        const HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        Ellipse(dc, center_x - ring_radius, center_y - ring_radius,
+                center_x + ring_radius, center_y + ring_radius);
+        SelectObject(dc, old_brush);
         SelectObject(dc, old_pen);
-        DeleteObject(ray_pen);
+        DeleteObject(ring_pen);
 
-        const double pulse = 1.0 + 0.22 * std::sin(progress * 3.141592653589793);
+        const double bounce = 1.0 + 0.12 * std::sin(progress * kPi);
+        const int value = last_move_.combo > 0 ? launched_value_ : last_move_.resulting_value;
+        drawTile(dc, x, y, kCellWidth - 10, kCellHeight - 9, value, bounce);
+    }
+
+    void drawBurst(HDC dc) const {
+        const double progress = std::clamp(
+            static_cast<double>(GetTickCount64() - phase_started_) /
+                static_cast<double>(kBurstDuration),
+            0.0, 1.0);
+        const int x = kGridLeft + static_cast<int>(last_move_.column) * kCellWidth + 5;
+        const int final_y = kGridTop + static_cast<int>(last_move_.row) * kCellHeight + 4;
+        const int start_y = kGridTop + static_cast<int>(launch_row_) * kCellHeight + 4;
+        const double move_progress = std::min(1.0, progress / 0.28);
+        const double move_eased = move_progress * move_progress * (3.0 - 2.0 * move_progress);
+        const int y = static_cast<int>(start_y + (final_y - start_y) * move_eased);
+        const int center_x = x + (kCellWidth - 10) / 2;
+        const int center_y = final_y + (kCellHeight - 9) / 2;
+
+        const double ray_life = std::max(0.0, 1.0 - progress / 0.48);
+        if (ray_life > 0.0) {
+            const COLORREF ray_color = blend(RGB(255, 242, 89), RGB(99, 49, 23),
+                                             1.0 - ray_life);
+            HPEN ray_pen = CreatePen(PS_SOLID, std::max(1, static_cast<int>(5 * ray_life)),
+                                     ray_color);
+            const HGDIOBJ old_pen = SelectObject(dc, ray_pen);
+            for (int ray = 0; ray < 16; ++ray) {
+                const double angle = ray * kPi / 8.0;
+                const double inner = 37.0 + progress * 35.0;
+                const double outer = 70.0 + progress * 95.0;
+                MoveToEx(dc, center_x + static_cast<int>(std::cos(angle) * inner),
+                         center_y + static_cast<int>(std::sin(angle) * inner), nullptr);
+                LineTo(dc, center_x + static_cast<int>(std::cos(angle) * outer),
+                       center_y + static_cast<int>(std::sin(angle) * outer));
+            }
+            SelectObject(dc, old_pen);
+            DeleteObject(ray_pen);
+        }
+
+        // Deterministic particles keep the effect stable between repaint calls while
+        // still providing varied spark directions, speeds, sizes, and colors.
+        const COLORREF result_color = tileColor(last_move_.resulting_value);
+        for (int particle = 0; particle < 34; ++particle) {
+            const double angle = particle * 2.399963229728653 +
+                                 (last_move_.resulting_value % 11) * 0.09;
+            const double speed = 58.0 + (particle % 9) * 12.0;
+            const double distance = speed * progress;
+            const int px = center_x + static_cast<int>(std::cos(angle) * distance);
+            const int py = center_y + static_cast<int>(std::sin(angle) * distance +
+                                                       72.0 * progress * progress);
+            const int tail_x = center_x + static_cast<int>(std::cos(angle) * distance * 0.72);
+            const int tail_y = center_y + static_cast<int>(std::sin(angle) * distance * 0.72 +
+                                                           50.0 * progress * progress);
+            COLORREF color = particle % 4 == 0
+                                 ? RGB(255, 255, 220)
+                                 : (particle % 3 == 0 ? RGB(255, 178, 26) : result_color);
+            color = blend(color, RGB(86, 41, 20), progress * 0.72);
+
+            HPEN trail_pen = CreatePen(PS_SOLID, particle % 3 == 0 ? 3 : 2, color);
+            const HGDIOBJ old_trail = SelectObject(dc, trail_pen);
+            MoveToEx(dc, tail_x, tail_y, nullptr);
+            LineTo(dc, px, py);
+            SelectObject(dc, old_trail);
+            DeleteObject(trail_pen);
+
+            const int radius = std::max(1, static_cast<int>((4 + particle % 5) *
+                                                             (1.0 - progress * 0.78)));
+            if (particle % 5 == 0) {
+                POINT diamond[4]{{px, py - radius - 2}, {px + radius, py},
+                                 {px, py + radius + 2}, {px - radius, py}};
+                HBRUSH brush = CreateSolidBrush(color);
+                const HGDIOBJ old_brush = SelectObject(dc, brush);
+                const HGDIOBJ old_particle_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+                Polygon(dc, diamond, 4);
+                SelectObject(dc, old_particle_pen);
+                SelectObject(dc, old_brush);
+                DeleteObject(brush);
+            } else {
+                fillEllipse(dc, px, py, radius, color);
+            }
+        }
+
+        for (int ring = 0; ring < 3; ++ring) {
+            const double ring_progress = std::clamp(progress * 1.8 - ring * 0.16, 0.0, 1.0);
+            if (ring_progress <= 0.0 || ring_progress >= 1.0) {
+                continue;
+            }
+            const int radius = 32 + static_cast<int>(ring_progress * 105.0);
+            HPEN ring_pen = CreatePen(PS_SOLID, std::max(1, 4 - ring),
+                                      blend(result_color, RGB(91, 44, 21), ring_progress));
+            const HGDIOBJ old_ring_pen = SelectObject(dc, ring_pen);
+            const HGDIOBJ old_ring_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+            Ellipse(dc, center_x - radius, center_y - radius,
+                    center_x + radius, center_y + radius);
+            SelectObject(dc, old_ring_brush);
+            SelectObject(dc, old_ring_pen);
+            DeleteObject(ring_pen);
+        }
+
+        const double pulse = 1.0 + 0.24 * std::sin(std::min(1.0, progress / 0.68) * kPi) *
+                                         (1.0 - progress * 0.35);
         drawTile(dc, x, y, kCellWidth - 10, kCellHeight - 9,
                  last_move_.resulting_value, pulse);
 
-        const int badge_y = std::min(kBoardBottom - 70, y + 58);
-        fillRoundedRect(dc, center_x - 82, badge_y, center_x + 82, badge_y + 40, 18,
-                        RGB(20, 91, 230), RGB(255, 255, 255), 2);
-        std::wstring badge = L"+" + std::to_wstring(last_move_.score_gained);
-        if (last_move_.combo > 1) {
-            badge += L"  COMBO x" + std::to_wstring(last_move_.combo);
+        if (progress < 0.9) {
+            const int badge_y = std::min(kBoardBottom - 70, final_y + 62) -
+                                static_cast<int>(progress * 42.0);
+            const COLORREF badge_color = blend(RGB(20, 91, 230), RGB(75, 37, 19),
+                                               std::max(0.0, progress - 0.65) * 2.0);
+            fillRoundedRect(dc, center_x - 86, badge_y, center_x + 86, badge_y + 40, 18,
+                            badge_color, RGB(255, 255, 255), 2);
+            std::wstring badge = L"+" + std::to_wstring(last_move_.score_gained);
+            if (last_move_.combo > 1) {
+                badge += L"  COMBO x" + std::to_wstring(last_move_.combo);
+            }
+            RECT badge_rect{center_x - 84, badge_y, center_x + 84, badge_y + 38};
+            drawShadowText(dc, badge, badge_rect, last_move_.combo > 1 ? 15 : 20,
+                           RGB(255, 255, 255));
         }
-        RECT badge_rect{center_x - 80, badge_y, center_x + 80, badge_y + 38};
-        drawShadowText(dc, badge, badge_rect, last_move_.combo > 1 ? 15 : 20,
-                       RGB(255, 255, 255));
     }
 
     void drawControls(HDC dc) const {

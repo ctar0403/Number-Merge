@@ -33,7 +33,7 @@ Game::MoveResult Game::place(std::size_t column, int value) {
     // This makes each move predictable while still allowing cascade combos.
     for (int chain = 1;; ++chain) {
         const auto group = connectedGroup(active);
-        if (group.size() < 3) {
+        if (group.size() < 2) {
             break;
         }
 
