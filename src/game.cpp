@@ -22,9 +22,9 @@ Game::MoveResult Game::place(std::size_t column, int value) {
         return result;
     }
 
-    Position active{kRows - 1, column};
+    Position active{0, column};
     while (board_[active.row][column] != 0) {
-        --active.row;
+        ++active.row;
     }
     board_[active.row][column] = value;
     result.placed = true;
@@ -48,10 +48,13 @@ Game::MoveResult Game::place(std::size_t column, int value) {
         result.combo = chain;
 
         for (std::size_t current_column = 0; current_column < kColumns; ++current_column) {
-            active = applyGravityToColumn(current_column, active);
+            active = compactColumnToTop(current_column, active);
         }
     }
 
+    result.row = active.row;
+    result.column = active.column;
+    result.resulting_value = board_[active.row][active.column];
     score_ += result.score_gained;
     return result;
 }
@@ -65,12 +68,12 @@ int Game::score() const noexcept {
 }
 
 bool Game::isGameOver() const noexcept {
-    return std::all_of(board_.front().begin(), board_.front().end(),
+    return std::all_of(board_.back().begin(), board_.back().end(),
                        [](int value) { return value != 0; });
 }
 
 bool Game::canPlace(std::size_t column) const noexcept {
-    return column < kColumns && board_[0][column] == 0;
+    return column < kColumns && board_[kRows - 1][column] == 0;
 }
 
 std::vector<Game::Position> Game::connectedGroup(Position start) const {
@@ -113,14 +116,13 @@ std::vector<Game::Position> Game::connectedGroup(Position start) const {
     return group;
 }
 
-Game::Position Game::applyGravityToColumn(std::size_t column, Position tracked) {
-    std::size_t write_row = kRows;
-    for (std::size_t read_row = kRows; read_row-- > 0;) {
+Game::Position Game::compactColumnToTop(std::size_t column, Position tracked) {
+    std::size_t write_row = 0;
+    for (std::size_t read_row = 0; read_row < kRows; ++read_row) {
         if (board_[read_row][column] == 0) {
             continue;
         }
 
-        --write_row;
         if (write_row != read_row) {
             board_[write_row][column] = board_[read_row][column];
             board_[read_row][column] = 0;
@@ -128,9 +130,9 @@ Game::Position Game::applyGravityToColumn(std::size_t column, Position tracked) 
         if (tracked.row == read_row && tracked.column == column) {
             tracked.row = write_row;
         }
+        ++write_row;
     }
     return tracked;
 }
 
 } // namespace number_merge
-

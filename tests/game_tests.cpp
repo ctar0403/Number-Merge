@@ -12,11 +12,11 @@ void expect(bool condition, const char* message) {
     }
 }
 
-void testTileFalls() {
+void testTileLaunchesUpward() {
     number_merge::Game game;
     expect(game.place(2, 2).placed, "a tile can be placed");
-    expect(game.board()[number_merge::Game::kRows - 1][2] == 2,
-           "a tile falls to the bottom");
+    expect(game.board()[0][2] == 2,
+           "a tile packs against the top of its column");
 }
 
 void testHorizontalMerge() {
@@ -27,10 +27,9 @@ void testHorizontalMerge() {
 
     expect(move.combo == 1, "three horizontal tiles merge");
     expect(move.score_gained == 12, "a three-tile merge awards points");
-    expect(game.board()[number_merge::Game::kRows - 1][2] == 4,
+    expect(game.board()[0][2] == 4,
            "the most recent tile is upgraded");
-    expect(game.board()[number_merge::Game::kRows - 1][0] == 0 &&
-               game.board()[number_merge::Game::kRows - 1][1] == 0,
+    expect(game.board()[0][0] == 0 && game.board()[0][1] == 0,
            "the other merged tiles disappear");
 }
 
@@ -41,8 +40,8 @@ void testVerticalMergeAndGravity() {
     const auto move = game.place(0, 4);
 
     expect(move.combo == 1, "three vertical tiles merge");
-    expect(game.board()[number_merge::Game::kRows - 1][0] == 8,
-           "the upgraded tile falls after a merge");
+    expect(game.board()[0][0] == 8,
+           "the upgraded tile stays packed at the top after a merge");
 }
 
 void testCascadeCombo() {
@@ -55,7 +54,7 @@ void testCascadeCombo() {
 
     expect(move.combo == 2, "an upgraded tile can trigger a cascade");
     expect(move.score_gained == 60, "later cascade steps use a combo multiplier");
-    expect(game.board()[number_merge::Game::kRows - 1][2] == 8,
+    expect(game.board()[0][2] == 8,
            "the cascade leaves the twice-upgraded tile");
 }
 
@@ -89,7 +88,7 @@ void testGameOverAndReset() {
 } // namespace
 
 int main() {
-    testTileFalls();
+    testTileLaunchesUpward();
     testHorizontalMerge();
     testVerticalMergeAndGravity();
     testCascadeCombo();

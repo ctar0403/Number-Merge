@@ -16,6 +16,9 @@ public:
         bool placed = false;
         int score_gained = 0;
         int combo = 0;
+        std::size_t row = 0;
+        std::size_t column = 0;
+        int resulting_value = 0;
     };
 
     Game();
@@ -35,11 +38,10 @@ private:
     };
 
     std::vector<Position> connectedGroup(Position start) const;
-    Position applyGravityToColumn(std::size_t column, Position tracked);
+    Position compactColumnToTop(std::size_t column, Position tracked);
 
     Board board_{};
     int score_ = 0;
 };
 
 } // namespace number_merge
-

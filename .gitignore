@@ -5,6 +5,7 @@
 *.o
 *.obj
 *.pdb
+number_merge_best.txt
 
 # IDE and editor files
 .vs/
@@ -16,4 +17,3 @@
 # OS-generated files
 .DS_Store
 Thumbs.db
-
